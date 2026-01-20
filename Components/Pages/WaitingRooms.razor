@@ -1,0 +1,235 @@
+@page "/waiting-rooms"
+@using TicTacToe.Services
+@using TicTacToe.Models
+@using Microsoft.AspNetCore.SignalR.Client
+@inject NavigationManager Navigation
+@inject GameService GameService
+@inject IJSRuntime JSRuntime
+
+<PageTitle>Waiting Rooms</PageTitle>
+
+<h1>Waiting Rooms</h1>
+
+<button class="btn btn-success mb-3" @onclick="() => showCreateModal = true">Stwórz now¹ grê</button>
+
+@if (showCreateModal)
+{
+    <div class="modal show d-block" tabindex="-1" style="background:rgba(0,0,0,0.5);">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Nowy pokój</h5>
+                </div>
+                <div class="modal-body">
+                    <input class="form-control" @bind="newRoomName" placeholder="Nazwa pokoju" />
+                    <label>Szerokoœæ planszy:</label>
+                    <input class="form-control" type="number" @bind="boardWidth" min="3" max="20" />
+                    <label>Wysokoœæ planszy:</label>
+                    <input class="form-control" type="number" @bind="boardHeight" min="3" max="20" />
+                    <label>Warunek zwyciêstwa (w linii):</label>
+                    <input class="form-control" type="number" @bind="winCondition" min="3" max="10" />
+                    <label><input type="checkbox" @bind="hasAI" /> W³¹cz AI</label>
+                    @if (hasAI)
+                    {
+                        <label>Symbol AI:</label>
+                        <select class="form-control" @bind="aiSymbol">
+                            <option value="O">O</option>
+                            <option value="X">X</option>
+                        </select>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-primary" @onclick="CreateNewGame">Utwórz</button>
+                    <button class="btn btn-secondary" @onclick="() => showCreateModal = false">Anuluj</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (showErrorModal)
+{
+    <div class="modal show d-block" tabindex="-1" style="background:rgba(0,0,0,0.5);">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">B³¹d</h5>
+                </div>
+                <div class="modal-body">
+                    <p>Pokój o podanym ID nie istnieje.</p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-primary" @onclick="() => showErrorModal = false">OK</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+.waiting-rooms-list {
+    max-width: 600px;
+    margin: 0 auto 2rem auto;
+    padding: 0;
+    list-style: none;
+}
+.waiting-rooms-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border: 1px solid #dee2e6;
+    border-radius: 12px;
+    margin-bottom: 16px;
+    padding: 16px 24px;
+    font-size: 1.1rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+.waiting-rooms-list li:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+.waiting-rooms-list button {
+    min-width: 120px;
+    border-radius: 6px;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+.waiting-rooms-list button:hover {
+    opacity: 0.9;
+}
+</style>
+
+<h2>Dostêpne pokoje</h2>
+@if (rooms.Any())
+{
+    <ul class="waiting-rooms-list">
+        @foreach (var room in rooms)
+        {
+            <li>
+                <span>@room.Name (ID: @room.Id) - Status: @GetRoomStatus(room) - Graczy: @room.Players.Count - Obserwatorów: @room.Spectators.Count</span>
+                @if (room.Players.Count < 2)
+                {
+                    <button class="btn btn-primary" @onclick="() => JoinRoom(room.Id)">Do³¹cz</button>
+                }
+                <button class="btn btn-secondary" @onclick="() => SpectateRoom(room.Id)">Obserwuj</button>
+            </li>
+        }
+    </ul>
+}
+else
+{
+    <p>Brak dostêpnych pokoi.</p>
+}
+
+@if (!string.IsNullOrEmpty(errorMessage))
+{
+    <div class="alert alert-danger">@errorMessage</div>
+}
+
+@code {
+    private List<Room> rooms = new();
+    private System.Timers.Timer? _timer;
+    private string? errorMessage;
+    private bool showCreateModal = false;
+    private bool showErrorModal = false;
+    private string newRoomName = string.Empty;
+    private HubConnection? hubConnection;
+
+    private int boardWidth = 10;
+    private int boardHeight = 10;
+    private int winCondition = 3;
+    private bool hasAI = false;
+    private char aiSymbol = 'O';
+
+    protected override async Task OnInitializedAsync()
+    {
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl(Navigation.ToAbsoluteUri("/gamehub"))
+            .Build();
+
+        hubConnection.On<Room>("PlayerLeft", r => InvokeAsync(() => LoadRooms()));
+        hubConnection.On("RoomClosed", () => InvokeAsync(() => LoadRooms()));
+
+        await hubConnection.StartAsync();
+
+        await LoadRooms();
+        _timer = new System.Timers.Timer(500);
+        _timer.Elapsed += async (s, e) => await InvokeAsync(LoadRooms);
+        _timer.Start();
+    }
+
+    private async Task LoadRooms()
+    {
+        rooms = GameService.GetAllRooms().ToList();
+        StateHasChanged();
+    }
+
+    private async Task CreateNewGame()
+    {
+        if (!string.IsNullOrWhiteSpace(newRoomName))
+        {
+            await JSRuntime.InvokeVoidAsync("console.log", $"Creating game: {newRoomName}");
+            Navigation.NavigateTo($"/game?create={Uri.EscapeDataString(newRoomName)}&width={boardWidth}&height={boardHeight}&win={winCondition}&ai={hasAI}&aisymbol={aiSymbol}");
+            newRoomName = string.Empty;
+            showCreateModal = false;
+        }
+        else
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "WprowadŸ nazwê pokoju.");
+        }
+    }
+
+    private async Task JoinRoom(string roomId)
+    {
+        var room = GameService.GetRoom(roomId);
+        if (room == null)
+        {
+            showErrorModal = true;
+            StateHasChanged();
+            return;
+        }
+        if (room.Players.Count >= 2)
+        {
+            showErrorModal = true;
+            StateHasChanged();
+            return;
+        }
+        Navigation.NavigateTo($"/game?join={roomId}");
+    }
+
+    private async Task SpectateRoom(string roomId)
+    {
+        var room = GameService.GetRoom(roomId);
+        if (room == null)
+        {
+            showErrorModal = true;
+            StateHasChanged();
+            return;
+        }
+        Navigation.NavigateTo($"/game?spectate={roomId}");
+    }
+
+    private string GetRoomStatus(Room room)
+    {
+        int playerCount = room.Players.Count;
+        if (playerCount < 2) return "Oczekuje na gracza";
+        if (room.IsPaused) return "Gra wstrzymana";
+        if (room.RoundFinished) return "Runda zakoñczona";
+        return "Gra trwa";
+    }
+
+    public void Dispose()
+    {
+        if (_timer != null)
+        {
+            _timer.Stop();
+            _timer.Dispose();
+        }
+        if (hubConnection != null)
+        {
+            hubConnection.DisposeAsync();
+        }
+    }
+}

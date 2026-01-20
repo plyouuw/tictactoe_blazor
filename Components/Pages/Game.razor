@@ -1,0 +1,558 @@
+﻿@page "/game"
+@rendermode InteractiveServer
+@using TicTacToe.Services
+@using TicTacToe.Models
+@inject NavigationManager Navigation
+@inject GameService GameService
+@inject IJSRuntime JSRuntime
+
+<PageTitle>Gra</PageTitle>
+
+<style>
+
+.board-container {
+    width: 100%;
+    max-width: 90vw;
+    max-height: 70vh;
+    overflow: auto;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 10px;
+    margin: 0 auto;
+}
+
+.board {
+    display: grid;
+    gap: 0;
+    border: 3px solid #0d6efd;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    padding: 0;
+    margin: 0 auto;
+}
+
+.cell {
+    width: 70px !important;
+    height: 70px !important;
+    font-size: 48px; 
+    font-weight: bold;
+    border: 2px solid #0d6efd;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+    margin: 0;
+    padding: 0;
+}
+
+.cell:hover:not(:disabled) {
+    background: #e7f1ff;
+    transform: scale(1.05);
+}
+
+.cell:active:not(:disabled) {
+    transform: scale(0.95);
+}
+
+.cell:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+
+.symbol-x {
+    color: #0d6efd;
+    font-weight: 900;
+    font-size: 48px;
+    line-height: 1;
+}
+
+.symbol-o {
+    color: #dc3545;
+    font-weight: 900;
+    font-size: 48px;
+    line-height: 1;
+}
+
+.highlight {
+    background: #fff3cd !important;
+    animation: pulse 0.5s ease;
+}
+
+@@keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+}
+
+@@media (max-width: 768px) {
+    .cell {
+        width: 50px !important;
+        height: 50px !important;
+        font-size: 32px;
+    }
+    
+    .symbol-x, .symbol-o {
+        font-size: 32px;
+    }
+}
+
+@@media (max-width: 480px) {
+    .cell {
+        width: 40px !important;
+        height: 40px !important;
+        font-size: 24px;
+    }
+    
+    .symbol-x, .symbol-o {
+        font-size: 24px;
+    }
+}
+</style>
+
+@if (room is null)
+{
+    <p>Ładowanie...</p>
+}
+else
+{
+    <div class="game-header bg-primary text-white py-3 mb-4 d-flex align-items-center justify-content-between">
+        <div class="header-section header-left d-flex flex-column align-items-center justify-content-center">
+
+            @if ((room.Players.Count == 2 || room.HasAI) && GetCurrentPlayer() != null)
+            {
+                @if (!room.IsPaused && !room.RoundFinished)
+                {
+                    <button class="btn btn-warning mb-2" @onclick="PauseGame">Wstrzymaj grę</button>
+                }
+                else if (room.IsPaused)
+                {
+                    var canResume = room.PausedBy == GetCurrentPlayer()?.ConnectionId;
+                    if (canResume)
+                    {
+                        <button class="btn btn-success mb-2" @onclick="ResumeGame">Wznów grę</button>
+                    }
+                }
+                @if (room.RoundFinished)
+                {
+                    <button class="btn btn-primary mb-2" @onclick="NextGame">Następna gra</button>
+                }
+            }
+        </div>
+        <div class="header-section header-center d-flex flex-column align-items-center justify-content-center">
+            <h2 class="mb-1">@room.Name</h2>
+            <div class="game-status">
+                @if (room.Players.Count == 2 || room.HasAI)
+                {
+                    @if (room.IsPaused)
+                    {
+                        <span>Status: Gra wstrzymana przez gracza</span>
+                    }
+                    else if (room.RoundFinished)
+                    {
+                        <span>Status: Runda zakończona - @GetWinnerText()</span>
+                    }
+                    else
+                    {
+                        <span>Status: Gra trwa - Kolej gracza <strong style="color: @(room.CurrentPlayer == 'X' ? "#0d6efd" : "#dc3545")">@room.CurrentPlayer</strong></span>
+                    }
+                }
+                else
+                {
+                    <span>Status: Oczekiwanie na drugiego gracza</span>
+                }
+            </div>
+            <div class="user-role">
+                @if (GetCurrentPlayer() != null)
+                {
+                    <span>Ty: Gracz <strong style="color: @(GetCurrentPlayer().Symbol == 'X' ? "#0d6efd" : "#dc3545")">@GetCurrentPlayer().Symbol</strong></span>
+                    @if (GetCurrentPlayer().Symbol == room.CurrentPlayer)
+                    {
+                        <span class="badge bg-success ms-2">TWOJA KOLEJ</span>
+                    }
+                }
+                else
+                {
+                    <span>Twoja rola: Obserwator</span>
+                }
+            </div>
+        </div>
+        <div class="header-section header-right d-flex flex-column align-items-center justify-content-center">
+            <button class="btn btn-danger mb-2" @onclick="LeaveGame">Odejdz od stołu</button>
+        </div>
+    </div>
+    <div class="container">
+        <div class="row justify-content-center align-items-start">
+            <div class="col-12 d-flex flex-column align-items-center mb-4">
+                <div class="board-container">
+                    <div class="board" style="grid-template-columns: repeat(@room.Board.Width, 70px); grid-template-rows: repeat(@room.Board.Height, 70px);">
+                        @for (int row = 0; row < room.Board.Height; row++)
+                        {
+                            @for (int col = 0; col < room.Board.Width; col++)
+                            {
+                                int r = row;
+                                int c = col;
+                                var piece = room.Board.GetPiece(c, r);
+                                var highlight = winningLine?.Contains((c, r)) ?? false ? " highlight" : "";
+                                <button class=$"cell{highlight}" @onclick="() => MakeMove(c, r)" disabled="@(!CanMakeMove)">
+                                    @if (piece == Piece.X)
+                                    {
+                                        <span class="symbol-x">X</span>
+                                    }
+                                    else if (piece == Piece.O)
+                                    {
+                                        <span class="symbol-o">O</span>
+                                    }
+                                </button>
+                            }
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="game-header bg-primary text-white py-2 mt-4 mb-4 d-flex align-items-center justify-content-center">
+        <div class="horizontal-stats d-flex w-100 justify-content-center align-items-center gap-4">
+            <div><strong>Runda:</strong> @room.RoundNumber</div>
+            <div><strong>Punkty X:</strong> @room.Wins.GetValueOrDefault('X', 0)</div>
+            <div><strong>Punkty O:</strong> @room.Wins.GetValueOrDefault('O', 0)</div>
+            <div><strong>Remisy:</strong> @room.Draws</div>
+            <div><strong>Całkowity czas gry:</strong> @((room.Players.Count == 2 ? room.TotalDuration + CurrentRoundDuration : room.TotalDuration).TotalSeconds.ToString("F2")) s</div>
+        </div>
+    </div>
+}
+
+@code {
+    private HubConnection hubConnection = null!;
+    private Room room = null!;
+    private bool isHost;
+    private string? roomId;
+    private SynchronizationContext? _uiContext;
+    private System.Timers.Timer? _timer;
+    private List<(int, int)>? winningLine;
+    private double pausedRoundDuration = 0;
+    private double finishedRoundDuration = 0;
+    private bool joinFailed = false;
+    private bool showSummary = false;
+    private bool showErrorModal = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _uiContext = SynchronizationContext.Current;
+
+        var uri = Navigation.ToAbsoluteUri(Navigation.Uri);
+        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        var create = query["create"];
+        var join = query["join"];
+        var spectate = query["spectate"];
+        var widthStr = query["width"];
+        var heightStr = query["height"];
+        var winStr = query["win"];
+        var aiStr = query["ai"];
+        var aiSymbolStr = query["aisymbol"];
+
+        _createParam = create;
+        _joinParam = join;
+        _spectateParam = spectate;
+        _widthParam = widthStr;
+        _heightParam = heightStr;
+        _winParam = winStr;
+        _aiParam = aiStr;
+        _aiSymbolParam = aiSymbolStr;
+
+        if (string.IsNullOrEmpty(create) && string.IsNullOrEmpty(join) && string.IsNullOrEmpty(spectate))
+        {
+            System.Diagnostics.Debug.WriteLine("[Game] Brak parametrów, sprawdzimy sessionStorage w OnAfterRenderAsync");
+            return;
+        }
+
+        await InitializeHub();
+    }
+
+    private string? _createParam;
+    private string? _joinParam;
+    private string? _spectateParam;
+    private string? _widthParam;
+    private string? _heightParam;
+    private string? _winParam;
+    private string? _aiParam;
+    private string? _aiSymbolParam;
+    private string? _reconnectSymbol;
+    private bool _initialized = false;
+
+    private async Task InitializeHub()
+    {
+        if (_initialized)
+        {
+            System.Diagnostics.Debug.WriteLine("[Game] InitializeHub już wywołane, pomijam");
+            return;
+        }
+        _initialized = true;
+        System.Diagnostics.Debug.WriteLine("[Game] InitializeHub - START");
+
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl(Navigation.ToAbsoluteUri("/gamehub"))
+            .Build();
+
+        hubConnection.On<Room>("RoomCreated", async r => 
+        {
+            if (r != null)
+            {
+                room = r;
+                isHost = true;
+                this.roomId = r.Id;
+                var myPlayer = r.Players.FirstOrDefault(p => p.ConnectionId == hubConnection.ConnectionId);
+                if (myPlayer != null)
+                {
+                    // przchowuje roomId i symbol w sessionStorage
+                    await JSRuntime.InvokeVoidAsync("sessionStorage.setItem", "myPlayerSymbol", myPlayer.Symbol.ToString());
+                    System.Diagnostics.Debug.WriteLine($"[Game] RoomCreated: Zapisano symbol {myPlayer.Symbol}");
+                }
+                await JSRuntime.InvokeVoidAsync("sessionStorage.setItem", "currentRoomId", r.Id);
+                System.Diagnostics.Debug.WriteLine($"[Game] RoomCreated: Zapisano {r.Id} w sessionStorage");
+                // czyszcze URL, zeby po polaczeniu i odswiezeniu strony nie probowalo tworzyc ponownie nowego pokoju
+                Navigation.NavigateTo("/game", false);
+                await InvokeAsync(StateHasChanged);
+            }
+        });
+        hubConnection.On<Room>("PlayerJoined", async r => 
+        { 
+            room = r;
+
+            if (r != null && !string.IsNullOrEmpty(r.Id))
+            {
+                var myPlayer = r.Players.FirstOrDefault(p => p.ConnectionId == hubConnection.ConnectionId);
+                if (myPlayer != null)
+                {
+                    // przchowuje roomId i symbol w sessionStorage
+                    await JSRuntime.InvokeVoidAsync("sessionStorage.setItem", "myPlayerSymbol", myPlayer.Symbol.ToString());
+                    System.Diagnostics.Debug.WriteLine($"[Game] PlayerJoined: Zapisano symbol {myPlayer.Symbol}");
+                }
+                await JSRuntime.InvokeVoidAsync("sessionStorage.setItem", "currentRoomId", r.Id);
+                System.Diagnostics.Debug.WriteLine($"[Game] PlayerJoined: Zapisano {r.Id} w sessionStorage");
+            }
+            if (_uiContext != null)
+            {
+                _uiContext.Post(_ => 
+                { 
+                    StateHasChanged(); 
+                }, null);
+            }
+            else
+            {
+                await InvokeAsync(StateHasChanged);
+            }
+        });
+        hubConnection.On<Room>("BoardUpdated", async r => 
+        { 
+            System.Diagnostics.Debug.WriteLine($"[Game Event] BoardUpdated: {r?.Id}, MoveCount={r?.MoveCount}");
+            room = r; 
+            if (_uiContext != null)
+            {
+                _uiContext.Post(_ => 
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Game Event] BoardUpdated - StateHasChanged via _uiContext");
+                    StateHasChanged(); 
+                }, null);
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine($"[Game Event] BoardUpdated - StateHasChanged via InvokeAsync");
+                await InvokeAsync(StateHasChanged);
+            }
+        });
+
+        hubConnection.On("RoomClosed", async () => { 
+            // usuwam info o pokoju i jego symbolu
+            await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "currentRoomId");
+            await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "myPlayerSymbol");
+            System.Diagnostics.Debug.WriteLine("[Game] RoomClosed: Usunięto z sessionStorage");
+            _uiContext?.Post(_ => Navigation.NavigateTo("/waiting-rooms"), null); 
+        });
+        hubConnection.On<Room>("GamePaused", r => { room = r; _uiContext?.Post(_ => StateHasChanged(), null); });
+        hubConnection.On<Room>("GameResumed", r => { room = r; _uiContext?.Post(_ => StateHasChanged(), null); });
+        hubConnection.On<Room>("PlayerLeft", r => { room = r; _uiContext?.Post(_ => StateHasChanged(), null); });
+        hubConnection.On("LeftGame", async () => { 
+            // tutaj tez je usuwam
+            await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "currentRoomId");
+            await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "myPlayerSymbol");
+            System.Diagnostics.Debug.WriteLine("[Game] LeftGame: Usunięto z sessionStorage");
+            _uiContext?.Post(_ => Navigation.NavigateTo("/waiting-rooms"), null); 
+        });
+        hubConnection.On<Room>("SpectatorJoined", r => { room = r; _uiContext?.Post(_ => StateHasChanged(), null); });
+
+        await hubConnection.StartAsync();
+
+        if (!string.IsNullOrEmpty(_createParam))
+        {
+            int width = int.TryParse(_widthParam, out var w) ? w : 10;
+            int height = int.TryParse(_heightParam, out var h) ? h : 10;
+            int win = int.TryParse(_winParam, out var wc) ? wc : 3;
+            bool ai = bool.TryParse(_aiParam, out var a) ? a : false;
+            char aiSym = !string.IsNullOrEmpty(_aiSymbolParam) ? _aiSymbolParam[0] : 'O';
+            await SendHubMessageAsync("CreateRoom", _createParam, width, height, win, ai, aiSym);
+        }
+        else if (!string.IsNullOrEmpty(_joinParam))
+        {
+            roomId = _joinParam;
+            // wysylam symbol do huba jesli laczy sie ponownie
+            if (!string.IsNullOrEmpty(_reconnectSymbol))
+            {
+                System.Diagnostics.Debug.WriteLine($"[Game] JoinRoom RECONNECT: {_joinParam}, symbol={_reconnectSymbol}");
+                await SendHubMessageAsync("JoinRoomReconnect", _joinParam, _reconnectSymbol);
+            }
+            else
+            {
+                await SendHubMessageAsync("JoinRoom", _joinParam);
+            }
+        }
+        else if (!string.IsNullOrEmpty(_spectateParam))
+        {
+            roomId = _spectateParam;
+            await SendHubMessageAsync("SpectateRoom", _spectateParam);
+        }
+    }
+
+    // eventowe
+
+    protected override void OnInitialized()
+    {
+        _timer = new System.Timers.Timer(50);
+        _timer.Elapsed += (sender, e) =>
+        {
+            if (room != null && room.Players.Count == 2 && !room.IsPaused && !room.RoundFinished)
+            {
+                InvokeAsync(StateHasChanged);
+            }
+        };
+        _timer.Start();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // taka flaga, zeby sie wielokrotnie nie wyzwalalo
+        if (firstRender && !_initialized)
+        {
+            var storedRoomId = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "currentRoomId");
+            var storedSymbol = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "myPlayerSymbol");
+            
+            if (!string.IsNullOrEmpty(storedRoomId) && 
+                string.IsNullOrEmpty(_createParam) && 
+                string.IsNullOrEmpty(_joinParam) && 
+                string.IsNullOrEmpty(_spectateParam))
+            {
+                System.Diagnostics.Debug.WriteLine($"[Game] Reconnect: Znaleziono pokój {storedRoomId}, symbol {storedSymbol} w sessionStorage");
+                _joinParam = storedRoomId;
+                _reconnectSymbol = storedSymbol;
+                // czyszcze adres po dolaczeniu do pokoju
+                Navigation.NavigateTo("/game", false);
+                
+                await InitializeHub();
+                return;
+            }
+
+            // jesli nie ma sessionStorage albo parametrow w url, to przenosi do waiting-rooms
+            if (string.IsNullOrEmpty(_createParam) && 
+                string.IsNullOrEmpty(_joinParam) && 
+                string.IsNullOrEmpty(_spectateParam))
+            {
+                System.Diagnostics.Debug.WriteLine("[Game] Brak parametrów i sessionStorage, nawigacja do waiting-rooms");
+                Navigation.NavigateTo("/waiting-rooms");
+                return;
+            }
+        }
+        
+        if (joinFailed)
+        {
+            joinFailed = false;
+            await JSRuntime.InvokeVoidAsync("alert", "Pokój o podanym ID nie istnieje lub jest już zajęty.");
+            Navigation.NavigateTo("/waiting-rooms");
+        }
+    }
+
+    // metody
+
+    private async Task MakeMove(int row, int col)
+    {
+        await SendHubMessageAsync("MakeMove", roomId, row, col);
+    }
+
+    private async Task PauseGame()
+    {
+        await SendHubMessageAsync("PauseGame", roomId);
+    }
+
+    private async Task ResumeGame()
+    {
+        await SendHubMessageAsync("ResumeGame", roomId);
+    }
+
+    private async Task NextGame()
+    {
+        await SendHubMessageAsync("NextGame", roomId);
+    }
+
+    private async Task LeaveGame()
+    {
+        var confirmed = await JSRuntime.InvokeAsync<bool>("confirm", "Czy na pewno chcesz odejść z gry?");
+        if (confirmed)
+        {
+            // czysczenie przechowywanych danych w sesji
+            await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "currentRoomId");
+            await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "myPlayerSymbol");
+            await SendHubMessageAsync("LeaveGame", roomId);
+        }
+    }
+
+    private string GetWinnerText()
+    {
+        if (room.GameResult.StartsWith("Wygrywa "))
+        {
+            var winner = room.GameResult.Substring(8);
+            return $"Wygrał gracz {winner}";
+        }
+        if (room.GameResult == "Remis")
+            return "Remis";
+        return string.Empty;
+    }
+
+    private async Task SendHubMessageAsync(string method, params object[] args)
+    {
+        if (hubConnection?.State == HubConnectionState.Connected)
+        {
+            try
+            {
+                // moze wyglada strasznie, ale za to dziala
+                if (args.Length == 0)
+                    await hubConnection.SendAsync(method);
+                else if (args.Length == 1)
+                    await hubConnection.SendAsync(method, args[0]);
+                else if (args.Length == 2)
+                    await hubConnection.SendAsync(method, args[0], args[1]);
+                else if (args.Length == 3)
+                    await hubConnection.SendAsync(method, args[0], args[1], args[2]);
+                else if (args.Length == 4)
+                    await hubConnection.SendAsync(method, args[0], args[1], args[2], args[3]);
+                else if (args.Length == 5)
+                    await hubConnection.SendAsync(method, args[0], args[1], args[2], args[3], args[4]);
+                else if (args.Length == 6)
+                    await hubConnection.SendAsync(method, args[0], args[1], args[2], args[3], args[4], args[5]);
+            }
+            catch (Exception ex)
+            {
+            }
+        }
+    }
+
+    private TimeSpan CurrentRoundDuration => room?.GameStartTime != null ? DateTime.Now - room.GameStartTime.Value : TimeSpan.Zero;
+
+    private Player? GetCurrentPlayer()
+    {
+        var connectionId = hubConnection?.ConnectionId;
+        return room?.Players.FirstOrDefault(p => p.ConnectionId == connectionId);
+    }
+
+    private bool CanMakeMove => room != null && room.GameResult == "Gra trwa" && room.Players.Count == 2 && !room.IsPaused && !room.RoundFinished && GetCurrentPlayer()?.Symbol == room.CurrentPlayer;
+}
